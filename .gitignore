@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------- Project-specific ----------
+PSXTest/                 # the dev virtualenv lives in the sibling PSX/ folder
+*_output.csv             # generated verdict output
+*_output.xlsx
+verdict_output.csv
+verdict_output.xlsx

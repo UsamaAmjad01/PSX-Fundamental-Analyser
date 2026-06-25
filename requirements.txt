@@ -1,0 +1,5 @@
+# Requires Python 3.11+ (psxdata needs 3.11+)
+psxdata>=0.1.0a3      # PSX live quote (current price)
+pandas>=2.2           # data wrangling + CSV/XLSX output
+openpyxl>=3.1         # .xlsx writer used by pandas
+requests>=2.31        # direct JSON calls to scstrade endpoints
