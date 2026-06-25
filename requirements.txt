@@ -3,3 +3,4 @@ psxdata>=0.1.0a3      # PSX live quote (current price)
 pandas>=2.2           # data wrangling + CSV/XLSX output
 openpyxl>=3.1         # .xlsx writer used by pandas
 requests>=2.31        # direct JSON calls to scstrade endpoints
+streamlit>=1.36       # interactive UI (app.py)
