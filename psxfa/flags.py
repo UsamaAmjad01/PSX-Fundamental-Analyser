@@ -132,55 +132,83 @@ def compute_flags(m, fin):
 
 
 def human_checklist(m, fin):
-    """Groups the tool can't judge. Returns (title, non_negotiable, [items])."""
+    """Groups the tool can't judge. Returns (title, non_negotiable, [(item, hint)])
+    where the hint is a one-line 'how to check this'."""
     sector = fin.get("sector") or "unknown sector"
     sec = sector.lower()
+
     groups = [("GOVERNANCE & MANAGEMENT  [NON-NEGOTIABLE GATE]", True, [
-        "Sponsor / group reputation and record with minority shareholders",
-        "Related-party transactions - magnitude and terms",
-        "History of minority squeeze or delisting attempts at low prices",
-        "Board independence and audit-committee quality",
-        "Dividend track record as a proxy for fair minority treatment",
+        ("Sponsor / group reputation and record with minority shareholders",
+         "Search the group's name with 'minority shareholders' / past disputes."),
+        ("Related-party transactions - magnitude and terms",
+         "Read the 'Related party transactions' note; big sales/loans to group firms are the risk."),
+        ("History of minority squeeze or delisting attempts at low prices",
+         "Search '<company> delisting' or 'buyback' news."),
+        ("Board independence and audit-committee quality",
+         "Annual report 'Board of Directors' - look for independent directors."),
+        ("Dividend track record as a proxy for fair minority treatment",
+         "Check 5+ years of payouts; consistency signals fairer treatment."),
     ])]
 
     if fin["is_bank"]:
         groups.append(("BANK REGULATORY - verify from annual report", True, [
-            "CAR >= ~11.5% incl. buffers (proxy Equity/Assets shown; not risk-weighted)",
-            "NPL / infection ratio and trend",
-            "Coverage ratio (provisions / NPLs)",
-            "Cost-to-income ratio (<50% efficient)",
-            "CASA ratio (higher = cheaper funding)",
-            "Current effective tax rate and ADR-tax status",
+            ("CAR >= ~11.5% incl. buffers (proxy shown is not risk-weighted)",
+             "Annual report 'Capital Adequacy' note."),
+            ("NPL / infection ratio and trend",
+             "'Non-performing / classified advances' note; lower and falling is better."),
+            ("Coverage ratio (provisions / NPLs)",
+             "Provisions held divided by NPLs; above 100% is conservative."),
+            ("Cost-to-income ratio (<50% efficient)",
+             "Operating expense divided by total income."),
+            ("CASA ratio (higher = cheaper funding)",
+             "Current + savings divided by total deposits."),
+            ("Current effective tax rate and ADR-tax status",
+             "Check the latest effective tax rate in the accounts."),
         ]))
 
     groups.append(("STAGE 0 - QUALITATIVE RED FLAGS", False, [
-        "Auditor qualification / emphasis-of-matter / going-concern note",
-        "Free float < 10-15% (confirm on PSX)",
-        "Sponsor shares pledged",
-        "Defaulter / Non-Compliant / DEL status",
-        "Frequent change of auditors or directors",
+        ("Auditor qualification / emphasis-of-matter / going-concern note",
+         "Read the 'Auditor's Report'; anything other than a clean opinion is a warning."),
+        ("Free float < 10-15%",
+         "PSX company page shows free float %; under ~15% is illiquid."),
+        ("Sponsor shares pledged",
+         "PSX announcements / pattern-of-shareholding note."),
+        ("Defaulter / Non-Compliant / DEL status",
+         "PSX marks these on the company page."),
+        ("Frequent change of auditors or directors",
+         "Compare auditor and directors across the last few annual reports."),
     ]))
 
     rec_items = [
-        "Receivables growing faster than sales",
-        "DSO / cash-conversion-cycle trend (no receivables line in the data)",
+        ("Receivables growing faster than sales",
+         "Compare 'Trade debts' growth vs sales growth over 3-5 years."),
+        ("DSO / cash-conversion-cycle trend (no receivables line in the data)",
+         "Trade debts / sales x 365; rising days = slower collection."),
     ]
     title = "RECEIVABLES / CIRCULAR DEBT"
     if any(k in sec for k in RECEIVABLES_HEAVY_SECTORS):
         title += f"  [HIGH PRIORITY - {sector}]"
-        rec_items.append("Reconcile reported profit vs cash actually collected "
-                         "from government / DISCOs / CPPA")
+        rec_items.append(("Reconcile reported profit vs cash actually collected "
+                          "from government / DISCOs / CPPA",
+                          "Compare net profit to operating cash flow in the cash-flow statement."))
     groups.append((title, False, rec_items))
 
     groups.append((f"MACRO / SECTOR  [{sector}]", False, [
-        "SBP policy rate / KIBOR direction vs this firm's leverage",
-        "PKR/USD and FX-linked debt or imported-input exposure",
-        "IMF programme status and FX reserves",
-        "Finance Act tax / duty changes affecting this sector",
-        "Relevant commodity input prices",
+        ("SBP policy rate / KIBOR direction vs this firm's leverage",
+         "Check the current SBP policy rate and its trend."),
+        ("PKR/USD and FX-linked debt or imported-input exposure",
+         "Exporters gain from a weaker rupee; importers and FX-debt holders lose."),
+        ("IMF programme status and FX reserves",
+         "Search the latest IMF programme status and reserve level."),
+        ("Finance Act tax / duty changes affecting this sector",
+         "Check the June budget for new taxes or duties on this sector."),
+        ("Relevant commodity input prices",
+         "Track the firm's key input (coal / gas / oil / cotton)."),
     ]))
     groups.append(("MOAT & CATALYST", False, [
-        "Durable competitive advantage vs peers",
-        "Identifiable re-rating catalyst in the next 6-18 months",
+        ("Durable competitive advantage vs peers",
+         "Why can't a rival undercut them - scale, brand, contracts, location?"),
+        ("Identifiable re-rating catalyst in the next 6-18 months",
+         "What event could make the market re-price the stock?"),
     ]))
     return groups

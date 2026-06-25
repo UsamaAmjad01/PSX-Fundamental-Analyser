@@ -9,7 +9,7 @@ from .config import DEFAULT_RISKFREE, PILLARS, BANK_PILLARS
 from .data import build_financials
 from .metrics import cross_check
 from .scoring import evaluate, evaluate_bank
-from .flags import compute_flags, human_checklist, beneish_partial
+from .flags import human_checklist, beneish_partial
 
 FILL = {"DANGER": "FFF8CBAD", "WARN": "FFFFE699", "INFO": "FFD9D9D9",
         "GOOD": "FFC6E0B4", "HEAD": "FF305496"}
@@ -26,7 +26,6 @@ def analyze(sym, riskfree=DEFAULT_RISKFREE):
         r = evaluate(fin, riskfree)
         r["profile"], r["pillar_names"] = "standard", list(PILLARS)
     r["fin"] = fin
-    r["flags"] = compute_flags(r["m"], fin)
     r["checklist"] = human_checklist(r["m"], fin)
     r["beneish_partial"] = beneish_partial(fin, r["m"].get("OCF"))
     return r
@@ -35,14 +34,24 @@ def analyze(sym, riskfree=DEFAULT_RISKFREE):
 def gate_status(r):
     stage0 = "PASS" if not r["stage0"] else "FAIL: " + "; ".join(r["stage0"])
     if r["profile"] == "bank":
-        cap = ("FAIL: " + "; ".join(r["cap_fail"])) if r["cap_fail"] else \
-              ("UNVERIFIED" if r["cap_unverified"] else "PASS")
+        if r["cap_fail"]:
+            cap = "FAIL: " + "; ".join(r["cap_fail"])
+        elif r["cap_unverified"]:
+            cap = "UNVERIFIED"
+        else:
+            cap = "SOFT PASS" if r.get("capital_soft") else "PASS"
         return {"Stage0": stage0, "Safety/Capital": cap, "Cash": "N/A (bank)"}
-    safety = ("FAIL: " + "; ".join(r["safety_fail"])) if r["safety_fail"] else \
-             ("UNVERIFIED" if r["safety_unverified"] else "PASS")
-    cash = ("FAIL: " + "; ".join(r["cash_fail"])) if r["cash_fail"] else \
-           ("UNVERIFIED" if r["cash_unverified"] else "PASS")
-    return {"Stage0": stage0, "Safety/Capital": safety, "Cash": cash}
+
+    def gate(fail, unverified, soft):
+        if fail:
+            return "FAIL: " + "; ".join(fail)
+        if unverified:
+            return "UNVERIFIED"
+        return "SOFT PASS" if soft else "PASS"
+
+    return {"Stage0": stage0,
+            "Safety/Capital": gate(r["safety_fail"], r["safety_unverified"], r.get("safety_soft")),
+            "Cash": gate(r["cash_fail"], r["cash_unverified"], r.get("cash_soft"))}
 
 
 def tier_only(verdict):
@@ -66,6 +75,8 @@ def print_console(r):
     print(f"  SCORE   : {comp}   Confidence {r['confidence']} "
           f"(coverage {r['coverage']*100:.0f}%)")
     print(f"  QUANT   : {r['verdict']}")
+    for note in r.get("review_flags", []):
+        print(f"  REVIEW  : {note}")
 
     print("  --- flags ---")
     for f in r["flags"]:
@@ -76,8 +87,8 @@ def print_console(r):
     print("  --- human checklist (printed unchecked) ---")
     for title, _, items in r["checklist"]:
         print(f"    {title}")
-        for it in items:
-            print(f"       [ ] {it}")
+        for label, _hint in items:
+            print(f"       [ ] {label}")
     print(f"  FINAL   : pending human governance review "
           f"(resolves to '{tier_only(r['verdict'])}' once gates + governance confirmed)")
 
@@ -150,15 +161,15 @@ def write_xlsx(results, path):
         wf.column_dimensions[col].width = w
 
     wh = wb.create_sheet("Human_Checklist")
-    wh.append(["Symbol", "Group", "Non-Negotiable", "Item", "Done?"])
+    wh.append(["Symbol", "Group", "Non-Negotiable", "Item", "How to check", "Done?"])
     for r in results:
         for title, non_neg, items in r["checklist"]:
-            for it in items:
-                wh.append([r["fin"]["sym"], title, "YES" if non_neg else "", it, ""])
+            for label, hint in items:
+                wh.append([r["fin"]["sym"], title, "YES" if non_neg else "", label, hint, ""])
                 if non_neg:
                     wh.cell(wh.max_row, 3).fill = PatternFill("solid", fgColor=FILL["DANGER"])
     _style_header(wh)
-    for col, w in {"A": 10, "B": 40, "C": 14, "D": 72, "E": 8}.items():
+    for col, w in {"A": 10, "B": 38, "C": 12, "D": 58, "E": 64, "F": 7}.items():
         wh.column_dimensions[col].width = w
 
     wc = wb.create_sheet("CrossCheck")

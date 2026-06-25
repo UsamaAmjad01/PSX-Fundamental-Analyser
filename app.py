@@ -1,8 +1,8 @@
 """Streamlit front-end for the PSX screener.  Run:  streamlit run app.py
 
 Presentation only - it calls the engine and renders the result. A BUY/STRONG BUY
-tier stays hidden behind a per-stock governance gate; the masked state and the
-downloadable report never assert a verdict the engine didn't independently make.
+tier stays hidden behind a per-stock governance gate, and the downloadable report
+never asserts a verdict the engine didn't independently make.
 """
 import io
 
@@ -15,36 +15,70 @@ from psxfa.config import DEFAULT_RISKFREE
 
 st.set_page_config(page_title="PSX Fundamental Analyzer", layout="wide")
 
-COLOR = {"DANGER": "#e69797", "WARN": "#f2d57e", "INFO": "#d0d0d0",
-         "PASS": "#a9d18e", "FAIL": "#e69797", "UNVERIFIED": "#f2d57e", "NA": "#d0d0d0"}
+# Bumped whenever the cached result shape changes, so a stale session is ignored
+# rather than rendered with mismatched code.
+_SCHEMA = 1
 
-
-def badge(text, color):
-    return (f"<span style='background:{color};color:#111;padding:2px 9px;"
-            f"border-radius:6px;margin:2px;display:inline-block;font-size:0.82em'>"
-            f"{text}</span>")
-
-
-def gate_color(v):
-    if v.startswith("PASS"):
-        return COLOR["PASS"]
-    if v.startswith("FAIL"):
-        return COLOR["FAIL"]
-    if v.startswith("N/A"):
-        return COLOR["NA"]
-    return COLOR["UNVERIFIED"]
+# Plain-English translations of the engine's flag names, for non-expert readers.
+PLAIN = {
+    "High leverage": "it carries a lot of debt relative to its own money",
+    "Weak cash conversion": "it reports profit but isn't fully collecting the cash",
+    "Interest coverage critical": "its profits barely cover the interest on its debt",
+    "Altman Z distress": "a bankruptcy-risk screen puts it in the danger zone",
+    "Altman Z grey zone": "a bankruptcy-risk screen reads borderline",
+    "Altman Z safe": "low statistical bankruptcy risk",
+    "Margin contraction": "its profit margins have been shrinking",
+    "High Debt/EBITDA": "its debt is large compared with yearly earnings",
+    "Beneish M (partial)": "an earnings-quality screen flags it for a closer look",
+    "Earnings declining": "its profit is lower than last year",
+    "Investment-heavy balance sheet": "most of its assets are parked in government securities",
+    "Thin capital (proxy)": "it has a thin capital cushion for a bank",
+}
+SEV_ICON = {"DANGER": "🔴", "WARN": "🟠", "INFO": "⚪"}
+TONE_ICON = {"strong": "🟢", "mixed": "🟡", "weak": "🔴"}
 
 
 def masked_tier(verdict):
     return verdict.startswith(("BUY", "STRONG BUY"))
 
 
+def avoid_reason(g):
+    if g["Cash"].startswith("FAIL"):
+        return "it isn't turning its reported profit into cash"
+    if g["Safety/Capital"].startswith("FAIL"):
+        return "it can't comfortably carry its debt / capital"
+    if g["Stage0"].startswith("FAIL"):
+        return "its accounts raise a basic red flag"
+    return "the fundamentals are too weak across the board"
+
+
+def plain_summary(r):
+    sym = r["fin"]["sym"]
+    n = sum(len(items) for _, nn, items in r["checklist"] if nn)
+    verdict, comp = r["verdict"], r["composite"]
+    live = [f for f in r["flags"] if f.severity in ("WARN", "DANGER")]
+    if verdict.startswith(("AVOID", "INSUFFICIENT")):
+        tone = "weak"
+        body = avoid_reason(gate_status(r)) if verdict.startswith("AVOID") else "there isn't enough data to judge it"
+        lead = f"On the numbers, **{sym}** looks weak — {body}."
+    elif comp is not None and comp >= 4.0 and not live:
+        tone = "strong"
+        lead = (f"On the numbers, **{sym}** looks strong — good returns, a sound "
+                f"balance sheet, and cash that backs up the profit.")
+    else:
+        tone = "mixed"
+        concern = PLAIN.get(live[0].name, live[0].name) if live else "the fundamentals are only average"
+        lead = f"On the numbers, **{sym}** is a mixed picture — {concern}."
+    lead += f" You still need to confirm **{n}** non-negotiable check(s) below before this is a real verdict."
+    return tone, lead
+
+
 st.title("PSX Fundamental Analyzer")
-st.caption("Screening tool - **not** investment advice. A buy verdict is hidden "
-           "until that stock's non-negotiable governance review is complete.")
+st.caption("Screening tool - **not** investment advice. A buy verdict stays hidden "
+           "until you complete that stock's non-negotiable governance review.")
 
 c1, c2, c3 = st.columns([3, 1, 1])
-tickers_raw = c1.text_input("PSX tickers (space or comma separated)", "LUCK EFERT MEBL")
+tickers_raw = c1.text_input("PSX tickers (space or comma separated)", "OGDC EFERT MEBL")
 riskfree = c2.number_input("Risk-free (T-bill %)", min_value=0.0, max_value=50.0,
                            value=float(DEFAULT_RISKFREE), step=0.5)
 analyze_clicked = c3.button("Analyze", type="primary", width="stretch")
@@ -59,8 +93,11 @@ if analyze_clicked:
             except Exception as e:
                 out[t] = ("err", str(e))
     st.session_state["results"] = out
+    st.session_state["_schema"] = _SCHEMA
 
 results = st.session_state.get("results", {})
+if st.session_state.get("_schema") != _SCHEMA:
+    results = {}      # cached from an older version - ignore it
 if not results:
     st.info("Enter one or more PSX tickers and click **Analyze**.")
     st.stop()
@@ -86,55 +123,72 @@ def render_card(ticker, status, payload):
     price = f"Rs {m['price']}" if m.get("price") is not None else "price n/a"
     st.subheader(f"{ticker}  ·  {fin.get('sector')}  ·  {prof}  ·  FY{m['year']}  ·  {price}")
 
-    g = gate_status(r)
-    st.markdown("**Gates** &nbsp;&nbsp;"
-                + " ".join(badge(f"{k}: {v}", gate_color(v)) for k, v in g.items()),
-                unsafe_allow_html=True)
+    # 1) plain-English lead
+    tone, lead = plain_summary(r)
+    st.markdown(f"#### {TONE_ICON[tone]} {lead}")
 
-    names = r["pillar_names"]
-    cols = st.columns(len(names) + 1)
-    for i, p in enumerate(names):
-        s = r["scores"].get(p)
-        cols[i].metric(p, f"{s:.1f}/5" if s is not None else "n/a")
-    comp = r["composite"]
-    cols[-1].metric("Composite", f"{comp:.2f}/5" if comp is not None else "n/a",
-                    help=f"Confidence: {r['confidence']}")
-
-    if r["flags"]:
-        st.markdown("**Flags** &nbsp;&nbsp;"
-                    + " ".join(badge(f"{f.severity}: {f.name}", COLOR[f.severity])
-                               for f in r["flags"]), unsafe_allow_html=True)
-        with st.expander("Flag details"):
-            for f in r["flags"]:
-                st.markdown(f"- **[{f.severity}] {f.name}** - {f.explanation}")
-
-    # Reveal is read from THIS ticker's checkbox state only, so one stock's
-    # gate cannot unlock another's.
+    # governance state for THIS ticker (read before the widgets are drawn)
     checklist = r["checklist"]
-    nonneg_keys = [f"gov::{ticker}::{gi}::{ii}"
-                   for gi, (title, nn, items) in enumerate(checklist) if nn
-                   for ii in range(len(items))]
-    reveal = bool(nonneg_keys) and all(st.session_state.get(k, False) for k in nonneg_keys)
+    nonneg = [f"gov::{ticker}::{gi}::{ii}"
+              for gi, (title, nn, items) in enumerate(checklist) if nn
+              for ii in range(len(items))]
+    states = [st.session_state.get(k, "Not checked") for k in nonneg]
+    gov_concern = "Concern" in states
+    gov_clear = bool(states) and all(s == "OK" for s in states)
     verdict = r["verdict"]
 
-    if masked_tier(verdict) and not reveal:
-        done = sum(1 for k in nonneg_keys if st.session_state.get(k, False))
-        st.warning(f"PENDING - complete governance review to reveal the verdict for "
-                   f"**{ticker}**  ({done}/{len(nonneg_keys)} non-negotiable items checked)")
-    elif masked_tier(verdict) and reveal:
+    # 2) verdict box (gated)
+    if gov_concern:
+        st.error("VERDICT: **AVOID — governance concern** (you flagged a non-negotiable item)")
+    elif masked_tier(verdict) and not gov_clear:
+        st.warning(f"**PENDING** — mark every non-negotiable item OK to reveal the verdict "
+                   f"({sum(s == 'OK' for s in states)}/{len(nonneg)} done)")
+    elif masked_tier(verdict):
         st.success(f"VERDICT (governance confirmed): **{verdict}**")
     elif verdict.startswith("AVOID"):
         st.error(f"VERDICT: **{verdict}**")
     else:
         st.info(f"VERDICT: **{verdict}**")
 
-    st.markdown("**Human checklist** — judgment required (governance is the non-negotiable gate)")
+    # 3) flags, plain-language, always visible
+    if r["flags"]:
+        st.markdown("**What to watch**")
+        for f in r["flags"]:
+            st.markdown(f"{SEV_ICON[f.severity]} {PLAIN.get(f.name, f.name)}")
+            st.caption(f"{f.name}: {f.explanation}")
+    else:
+        st.markdown("✅ No red flags on the numbers.")
+
+    if r.get("review_flags"):
+        with st.expander("Review notes", expanded=True):
+            for note in r["review_flags"]:
+                st.markdown(f"- {note}")
+
+    # 4) checklist - non-negotiables are a 3-way choice that gates the verdict
+    st.markdown("**Checks you must do** — the tool cannot judge these")
     for gi, (title, nn, items) in enumerate(checklist):
         st.markdown(("🔒 " if nn else "") + f"**{title}**")
-        for ii, item in enumerate(items):
-            st.checkbox(item, key=f"gov::{ticker}::{gi}::{ii}")
+        for ii, (item, hint) in enumerate(items):
+            key = f"gov::{ticker}::{gi}::{ii}"
+            if nn:
+                st.radio(item, ["Not checked", "OK", "Concern"], key=key, horizontal=True)
+            else:
+                st.checkbox(item, key=key)
+            st.caption(f"How to check: {hint}")
 
-    with st.expander("Audit — compute vs scstrade cross-check (ratios only, no verdict)"):
+    # 5) details + advanced, collapsed
+    with st.expander("See the details (pillar scores and gates)"):
+        g = gate_status(r)
+        st.write({k: v for k, v in g.items()})
+        cols = st.columns(len(r["pillar_names"]) + 1)
+        for i, p in enumerate(r["pillar_names"]):
+            s = r["scores"].get(p)
+            cols[i].metric(p, f"{s:.1f}/5" if s is not None else "n/a")
+        comp = r["composite"]
+        cols[-1].metric("Composite", f"{comp:.2f}/5" if comp is not None else "n/a",
+                        help=f"Confidence: {r['confidence']}")
+
+    with st.expander("For advanced users — data cross-check"):
         df = pd.DataFrame([{
             "Section": sec, "Metric": me, "Computed": c, "scstrade": sv,
             "Delta_%": (round(abs(c * scale - sv) / abs(sv) * 100, 1)
